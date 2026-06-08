@@ -1,0 +1,8 @@
+{
+  "AAPL":    { "name": "Apple Inc.",            "price": 212.4,  "day_change_pct": 0.83,  "sector": "Technology",        "asset_type": "stock",  "annual_vol": 0.27, "beta": 1.20 },
+  "NVDA":    { "name": "NVIDIA Corporation",    "price": 168.9,  "day_change_pct": 2.41,  "sector": "Technology",        "asset_type": "stock",  "annual_vol": 0.52, "beta": 1.75 },
+  "TSLA":    { "name": "Tesla, Inc.",           "price": 219.3,  "day_change_pct": -3.12, "sector": "Consumer Cyclical", "asset_type": "stock",  "annual_vol": 0.61, "beta": 2.10 },
+  "VOO":     { "name": "Vanguard S&P 500 ETF",  "price": 545.7,  "day_change_pct": 0.41,  "sector": "Diversified ETF",   "asset_type": "etf",    "annual_vol": 0.15, "beta": 1.00 },
+  "BTC-USD": { "name": "Bitcoin USD",           "price": 64850.0,"day_change_pct": -1.87, "sector": "Cryptocurrency",    "asset_type": "crypto", "annual_vol": 0.78, "beta": 1.90 },
+  "SPY":     { "name": "SPDR S&P 500 ETF",      "price": 595.2,  "day_change_pct": 0.39,  "sector": "Diversified ETF",   "asset_type": "etf",    "annual_vol": 0.15, "beta": 1.00 }
+}

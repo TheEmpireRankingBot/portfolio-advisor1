@@ -1,0 +1,22 @@
+{
+  "AAPL": [
+    { "title": "Apple beats earnings expectations on strong services growth", "publisher": "Demo Wire", "link": "https://example.com/aapl1", "published": "2026-06-05" },
+    { "title": "Analysts raise Apple price target after upbeat iPhone demand", "publisher": "Demo Wire", "link": "https://example.com/aapl2", "published": "2026-06-03" },
+    { "title": "Regulators open new antitrust probe into Apple App Store", "publisher": "Demo Wire", "link": "https://example.com/aapl3", "published": "2026-06-01" }
+  ],
+  "NVDA": [
+    { "title": "NVIDIA surges to record high on booming AI chip orders", "publisher": "Demo Wire", "link": "https://example.com/nvda1", "published": "2026-06-06" },
+    { "title": "Supply constraints could limit NVIDIA near-term shipments, warns analyst", "publisher": "Demo Wire", "link": "https://example.com/nvda2", "published": "2026-06-02" }
+  ],
+  "TSLA": [
+    { "title": "Tesla deliveries disappoint, shares tumble on weak demand", "publisher": "Demo Wire", "link": "https://example.com/tsla1", "published": "2026-06-06" },
+    { "title": "Tesla faces recall over software glitch in latest models", "publisher": "Demo Wire", "link": "https://example.com/tsla2", "published": "2026-06-04" }
+  ],
+  "VOO": [
+    { "title": "S&P 500 climbs to new high as inflation cools", "publisher": "Demo Wire", "link": "https://example.com/voo1", "published": "2026-06-05" }
+  ],
+  "BTC-USD": [
+    { "title": "Bitcoin slides as traders take profits after rally", "publisher": "Demo Wire", "link": "https://example.com/btc1", "published": "2026-06-06" },
+    { "title": "Major bank announces support for Bitcoin custody, boosting adoption", "publisher": "Demo Wire", "link": "https://example.com/btc2", "published": "2026-06-03" }
+  ]
+}

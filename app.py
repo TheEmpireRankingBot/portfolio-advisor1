@@ -90,13 +90,10 @@ def money(x: float, cur: str = "USD") -> str:
 
 
 def demo_banner(demo: bool) -> None:
-    if demo:
-        st.warning(
-            "📡 **Demo mode** — live market data isn't reachable here (offline or a "
-            "sandbox network allowlist), so figures below are **illustrative sample "
-            "data**. Run this app on your own machine to get real prices & news.",
-            icon="📡",
-        )
+    # Banner intentionally disabled — live data is the normal case, and a single
+    # symbol falling back shouldn't shout at the user. Kept as a no-op so the
+    # existing call sites don't need to change.
+    return
 
 
 # --------------------------------------------------------------------------- #

@@ -1,32 +1,46 @@
-"""Market data access.
+"""Market data access (cloud-friendly).
 
-Tries to fetch *live* data with yfinance. If the network is unavailable (for
-example inside a sandbox with a host allowlist, or simply offline), it falls
-back to the bundled ``sample_data/`` files and flips ``DEMO_MODE`` on so the UI
-can tell the user they're looking at illustrative data rather than real quotes.
+The original version relied on Yahoo Finance, which blocks requests coming from
+cloud servers (so a deployed app fell back to demo data). This version uses
+sources that work from the cloud:
 
-The public functions all return plain Python / pandas objects so the rest of
-the app never has to know where the numbers came from.
+    * Quotes  -> Finnhub (needs a free FINNHUB_API_KEY) for name/price/%/sector.
+                 Falls back to Stooq (keyless) for stocks and for crypto.
+    * History -> Stooq daily CSV (keyless) for volatility / beta / drawdown.
+    * News    -> Finnhub company-news (needs the key).
+
+If everything is unreachable (e.g. offline), it falls back to the bundled
+``sample_data/`` and flips ``DEMO_MODE`` so the UI shows a clear banner. Set your
+key on Streamlit Cloud under *Settings -> Secrets* as:  FINNHUB_API_KEY="..."
+(Streamlit also exposes secrets as environment variables, which is what we read.)
 """
 
 from __future__ import annotations
 
+import io
 import json
 import os
+from datetime import datetime, timedelta
 from functools import lru_cache
 
 import numpy as np
 import pandas as pd
+import requests
 
 _SAMPLE_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "sample_data")
 
-# Flipped to True the first time a live fetch fails. The UI reads this to show
-# a "demo mode" banner. It starts False and we discover the truth lazily.
-# Set PORTFOLIO_ADVISOR_DEMO=1 to force demo mode up front (instant, no network)
-# — handy offline or in a sandbox where market hosts are blocked.
-DEMO_MODE = os.environ.get("PORTFOLIO_ADVISOR_DEMO", "").lower() in ("1", "true", "yes")
+FINNHUB_KEY = os.environ.get("FINNHUB_API_KEY", "").strip()
+FINNHUB = "https://finnhub.io/api/v1"
+STOOQ = "https://stooq.com"
+MARKET_TICKER = "SPY"  # benchmark used for beta
+TIMEOUT = 10
 
-MARKET_TICKER = "SPY"  # used as the market benchmark for beta
+# True only when the user-visible PRICES are demo data (drives the UI banner).
+# History/news falling back stay silent so we don't cry wolf when prices are live.
+DEMO_MODE = False
+
+_SESSION = requests.Session()
+_SESSION.headers.update({"User-Agent": "Mozilla/5.0 (compatible; PortfolioAdvisor/1.0)"})
 
 
 def _load_sample(name: str) -> dict:
@@ -39,54 +53,131 @@ def _go_demo() -> None:
     DEMO_MODE = True
 
 
-def _try_import_yf():
-    """Import yfinance lazily so the app still loads if it isn't installed."""
-    try:
-        import yfinance as yf  # noqa: WPS433 (intentional local import)
+# --------------------------------------------------------------------------- #
+# Symbol helpers
+# --------------------------------------------------------------------------- #
+def _is_crypto(ticker: str) -> bool:
+    return ticker.upper().endswith("-USD")
 
-        return yf
-    except Exception:  # pragma: no cover - environment dependent
-        return None
+
+def _stooq_symbol(ticker: str) -> str:
+    """Map a ticker to Stooq's symbol format.
+
+    AAPL -> aapl.us | VOO -> voo.us | BTC-USD -> btcusd | D05.SI -> d05.sg
+    """
+    t = ticker.upper().strip()
+    if t.endswith("-USD"):
+        return t[:-4].lower() + "usd"
+    if "." in t:
+        base, suffix = t.split(".", 1)
+        suffix = {"SI": "sg", "L": "uk", "HK": "hk"}.get(suffix, suffix.lower())
+        return f"{base.lower()}.{suffix}"
+    return t.lower() + ".us"
 
 
 # --------------------------------------------------------------------------- #
 # Quotes
 # --------------------------------------------------------------------------- #
 def get_quote(ticker: str) -> dict:
-    """Return ``{name, price, day_change_pct, sector, asset_type}`` for a ticker."""
-    ticker = ticker.upper().strip()
-    yf = _try_import_yf()
-    if yf is not None and not DEMO_MODE:
-        try:
-            t = yf.Ticker(ticker)
-            info = t.info or {}
-            price = info.get("currentPrice") or info.get("regularMarketPrice")
-            prev = info.get("previousClose")
-            if price:
-                day_change = ((price - prev) / prev * 100) if prev else 0.0
-                return {
-                    "name": info.get("shortName") or ticker,
-                    "price": float(price),
-                    "day_change_pct": float(day_change),
-                    "sector": info.get("sector") or _infer_sector(info, ticker),
-                    "asset_type": _infer_asset_type(info, ticker),
-                }
-        except Exception:
-            _go_demo()
+    """Return ``{name, price, day_change_pct, sector[, asset_type]}``.
 
-    # ---- demo fallback ----
+    asset_type is only set for crypto; for everything else it's omitted so the
+    holding's own asset_type (stock/etf) wins downstream.
+    """
+    t = ticker.upper().strip()
+
+    # Crypto: Finnhub free doesn't cover BTC-USD cleanly, so use Stooq.
+    if _is_crypto(t):
+        q = _stooq_quote(t)
+        if q:
+            return q
+    elif FINNHUB_KEY:
+        q = _finnhub_quote(t)
+        if q:
+            return q
+    else:
+        # No key: still try to show live prices via keyless Stooq.
+        q = _stooq_quote(t)
+        if q:
+            return q
+
     _go_demo()
-    quotes = _load_sample("quotes")
-    q = quotes.get(ticker)
-    if q is None:
-        # Unknown ticker in demo mode: synthesise a neutral placeholder.
+    return _demo_quote(t)
+
+
+def _finnhub_quote(ticker: str) -> dict | None:
+    try:
+        r = _SESSION.get(
+            f"{FINNHUB}/quote",
+            params={"symbol": ticker, "token": FINNHUB_KEY},
+            timeout=TIMEOUT,
+        )
+        data = r.json()
+        price = data.get("c")
+        if not price:  # 0 or None -> unknown symbol / no data
+            return None
+        name, sector = ticker, "Unknown"
+        try:
+            p = _SESSION.get(
+                f"{FINNHUB}/stock/profile2",
+                params={"symbol": ticker, "token": FINNHUB_KEY},
+                timeout=TIMEOUT,
+            ).json()
+            name = p.get("name") or ticker
+            sector = p.get("finnhubIndustry") or "Unknown"
+        except Exception:
+            pass
         return {
-            "name": ticker,
-            "price": 100.0,
-            "day_change_pct": 0.0,
-            "sector": "Unknown",
-            "asset_type": "stock",
+            "name": name,
+            "price": float(price),
+            "day_change_pct": float(data.get("dp") or 0.0),
+            "sector": sector,
         }
+    except Exception:
+        return None
+
+
+def _stooq_quote(ticker: str) -> dict | None:
+    try:
+        sym = _stooq_symbol(ticker)
+        r = _SESSION.get(
+            f"{STOOQ}/q/l/",
+            params={"s": sym, "f": "sd2t2ohlcvn", "h": "", "e": "csv"},
+            timeout=TIMEOUT,
+        )
+        df = pd.read_csv(io.StringIO(r.text))
+        if df.empty:
+            return None
+        row = df.iloc[0]
+        close = row.get("Close")
+        if close in (None, "N/D") or pd.isna(close):
+            return None
+        close = float(close)
+        open_ = row.get("Open")
+        day = 0.0
+        try:
+            if open_ not in (None, "N/D") and not pd.isna(open_) and float(open_):
+                day = (close - float(open_)) / float(open_) * 100
+        except Exception:
+            day = 0.0
+        crypto = _is_crypto(ticker)
+        res = {
+            "name": str(row.get("Name") or ticker),
+            "price": close,
+            "day_change_pct": day,
+            "sector": "Cryptocurrency" if crypto else "Unknown",
+        }
+        if crypto:
+            res["asset_type"] = "crypto"
+        return res
+    except Exception:
+        return None
+
+
+def _demo_quote(ticker: str) -> dict:
+    q = _load_sample("quotes").get(ticker)
+    if q is None:
+        return {"name": ticker, "price": 100.0, "day_change_pct": 0.0, "sector": "Unknown"}
     return {
         "name": q["name"],
         "price": q["price"],
@@ -96,40 +187,40 @@ def get_quote(ticker: str) -> dict:
     }
 
 
-def _infer_asset_type(info: dict, ticker: str) -> str:
-    if ticker.endswith("-USD"):
-        return "crypto"
-    qt = (info.get("quoteType") or "").upper()
-    if qt == "ETF":
-        return "etf"
-    if qt == "CRYPTOCURRENCY":
-        return "crypto"
-    return "stock"
-
-
-def _infer_sector(info: dict, ticker: str) -> str:
-    if ticker.endswith("-USD"):
-        return "Cryptocurrency"
-    return info.get("sector") or "Unknown"
-
-
 # --------------------------------------------------------------------------- #
 # Price history (for volatility / beta / drawdown)
 # --------------------------------------------------------------------------- #
 def get_history(ticker: str, period: str = "1y") -> pd.Series:
-    """Daily closing prices as a pandas Series indexed by date."""
-    ticker = ticker.upper().strip()
-    yf = _try_import_yf()
-    if yf is not None and not DEMO_MODE:
-        try:
-            df = yf.Ticker(ticker).history(period=period)
-            if not df.empty:
-                return df["Close"].dropna()
-        except Exception:
-            _go_demo()
+    """Daily closing prices. Uses Stooq; falls back to a synthetic series.
 
-    _go_demo()
-    return _synthetic_history(ticker)
+    A history miss does NOT flip DEMO_MODE — prices can still be live even if a
+    single symbol's history is unavailable.
+    """
+    s = _stooq_history(ticker)
+    if s is not None and len(s) > 5:
+        return s
+    return _synthetic_history(ticker.upper().strip())
+
+
+def _stooq_history(ticker: str) -> pd.Series | None:
+    try:
+        sym = _stooq_symbol(ticker)
+        r = _SESSION.get(f"{STOOQ}/q/d/l/", params={"s": sym, "i": "d"}, timeout=TIMEOUT)
+        df = pd.read_csv(io.StringIO(r.text))
+        if "Close" not in df.columns or df.empty:
+            return None
+        s = pd.Series(
+            df["Close"].astype(float).values,
+            index=pd.to_datetime(df["Date"]),
+            name=ticker.upper(),
+        ).dropna()
+        return s.tail(252)  # ~1 trading year
+    except Exception:
+        return None
+
+
+def get_market_history(period: str = "1y") -> pd.Series:
+    return get_history(MARKET_TICKER, period=period)
 
 
 _DEMO_DAYS = 252
@@ -138,11 +229,6 @@ _MARKET_ANNUAL_VOL = 0.15
 
 @lru_cache(maxsize=1)
 def _demo_market_returns() -> np.ndarray:
-    """A single shared 'market' daily-return series for demo mode.
-
-    Every synthetic ticker is built from this series so that beta is recoverable
-    (a holding with sample beta 1.75 really does move ~1.75x the market here).
-    """
     rng = np.random.default_rng(20240101)
     daily_vol = _MARKET_ANNUAL_VOL / np.sqrt(252)
     return rng.normal(loc=0.0004, scale=daily_vol, size=_DEMO_DAYS)
@@ -150,12 +236,7 @@ def _demo_market_returns() -> np.ndarray:
 
 @lru_cache(maxsize=64)
 def _synthetic_history(ticker: str, days: int = _DEMO_DAYS) -> pd.Series:
-    """Deterministic price series for demo mode, correlated to the market.
-
-    Returns are modelled as ``r = beta * market + idiosyncratic noise`` with the
-    noise sized so the holding's total volatility matches the bundled sample
-    metadata. This keeps demo-mode volatility AND beta realistic.
-    """
+    """Deterministic fallback series, correlated to the market so beta is sane."""
     quotes = _load_sample("quotes")
     q = quotes.get(ticker, {"price": 100.0, "annual_vol": 0.30, "beta": 1.0})
     end_price = float(q.get("price", 100.0))
@@ -165,7 +246,6 @@ def _synthetic_history(ticker: str, days: int = _DEMO_DAYS) -> pd.Series:
     market = _demo_market_returns()[:days]
     market_daily_vol = _MARKET_ANNUAL_VOL / np.sqrt(252)
     target_daily_var = (annual_vol / np.sqrt(252)) ** 2
-    # var(r) = beta^2 * var_market + var_noise  ->  solve for the noise variance.
     noise_var = max(target_daily_var - (beta**2) * (market_daily_vol**2), 1e-8)
 
     seed = abs(hash(ticker)) % (2**32)
@@ -174,55 +254,47 @@ def _synthetic_history(ticker: str, days: int = _DEMO_DAYS) -> pd.Series:
     daily_ret = 0.0004 + beta * market + noise
 
     path = np.cumprod(1 + daily_ret)
-    path = path / path[-1] * end_price  # end exactly at the quoted price
+    path = path / path[-1] * end_price
     idx = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=days)
     return pd.Series(path, index=idx, name=ticker)
-
-
-def get_market_history(period: str = "1y") -> pd.Series:
-    """Benchmark (S&P 500) history used as the 'market' when computing beta."""
-    return get_history(MARKET_TICKER, period=period)
 
 
 # --------------------------------------------------------------------------- #
 # News
 # --------------------------------------------------------------------------- #
 def get_news(ticker: str, limit: int = 6) -> list[dict]:
-    """Recent headlines: ``[{title, publisher, link, published}, ...]``."""
-    ticker = ticker.upper().strip()
-    yf = _try_import_yf()
-    if yf is not None and not DEMO_MODE:
+    """Recent headlines: ``[{title, publisher, link, published}, ...]``.
+
+    Uses Finnhub company-news (needs the key, stocks/ETFs only). On any miss it
+    quietly returns bundled sample headlines without flipping DEMO_MODE.
+    """
+    t = ticker.upper().strip()
+    if FINNHUB_KEY and not _is_crypto(t):
         try:
-            raw = yf.Ticker(ticker).news or []
+            to = datetime.utcnow().date()
+            frm = to - timedelta(days=14)
+            r = _SESSION.get(
+                f"{FINNHUB}/company-news",
+                params={"symbol": t, "from": frm.isoformat(), "to": to.isoformat(), "token": FINNHUB_KEY},
+                timeout=TIMEOUT,
+            )
+            arr = r.json()
             items = []
-            for n in raw[:limit]:
-                content = n.get("content", n)  # yfinance schema varies by version
-                title = content.get("title") or n.get("title")
+            for n in arr[:limit]:
+                title = n.get("headline")
                 if not title:
                     continue
-                pub = (
-                    content.get("provider", {}).get("displayName")
-                    if isinstance(content.get("provider"), dict)
-                    else n.get("publisher")
-                )
-                link = (
-                    content.get("canonicalUrl", {}).get("url")
-                    if isinstance(content.get("canonicalUrl"), dict)
-                    else n.get("link")
-                )
+                ts = n.get("datetime")
                 items.append(
                     {
                         "title": title,
-                        "publisher": pub or "",
-                        "link": link or "",
-                        "published": content.get("pubDate") or n.get("providerPublishTime") or "",
+                        "publisher": n.get("source", ""),
+                        "link": n.get("url", ""),
+                        "published": datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d") if ts else "",
                     }
                 )
             if items:
                 return items
         except Exception:
-            _go_demo()
-
-    _go_demo()
-    news = _load_sample("news")
-    return news.get(ticker, [])[:limit]
+            pass
+    return _load_sample("news").get(t, [])[:limit]

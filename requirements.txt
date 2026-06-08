@@ -1,7 +1,0 @@
-streamlit>=1.31
-yfinance>=0.2.40
-pandas>=2.0
-numpy>=1.24
-plotly>=5.18
-vaderSentiment>=3.3.2
-anthropic>=0.40

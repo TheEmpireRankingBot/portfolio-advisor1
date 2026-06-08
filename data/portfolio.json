@@ -1,0 +1,54 @@
+{
+  "base_currency": "USD",
+  "holdings": [
+    {
+      "ticker": "AMZN",
+      "shares": 2.4019,
+      "avg_price": 248.65,
+      "buy_date": "2026-04-12",
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "NVDA",
+      "shares": 1.0,
+      "avg_price": 207.15,
+      "buy_date": "2026-05-06",
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "IONQ",
+      "shares": 0.4709,
+      "avg_price": 58.293,
+      "buy_date": "2026-05-21",
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "KO",
+      "shares": 1.0,
+      "avg_price": 77.44,
+      "buy_date": "2026-04-12",
+      "asset_type": "etf"
+    },
+    {
+      "ticker": "MSFT",
+      "shares": 0.6685,
+      "avg_price": 413.46,
+      "buy_date": "2026-05-06",
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "QQQM",
+      "shares": 2.0,
+      "avg_price": 272.49,
+      "buy_date": "2026-04-15",
+      "asset_type": "etf"
+    },
+    {
+      "ticker": "ES3",
+      "shares": 52.0,
+      "avg_price": 5.17,
+      "buy_date": "2026-05-02",
+      "asset_type": "etf"
+    }
+  ]
+}

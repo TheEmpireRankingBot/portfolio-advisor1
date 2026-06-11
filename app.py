@@ -17,7 +17,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from advisor import ai_coach, data_fetch, education, metrics, news, risk_score, weaknesses
+from advisor import ai_coach, data_fetch, education, metrics, news, risk_score, terminal, weaknesses
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 PORTFOLIO_PATH = os.path.join(DATA_DIR, "portfolio.json")
@@ -342,13 +342,16 @@ def main() -> None:
     st.sidebar.caption("Track. Diagnose. Learn.")
     page = st.sidebar.radio(
         "Go to",
-        ["Dashboard", "My Holdings", "Risk & Discipline", "Weaknesses", "News", "AI Coach", "Learn"],
+        ["Dashboard", "Terminal", "My Holdings", "Risk & Discipline", "Weaknesses", "News", "AI Coach", "Learn"],
     )
     st.sidebar.divider()
     st.sidebar.caption(
         "⚠️ Educational tool only — **not financial advice**. Do your own research."
     )
 
+    if page == "Terminal":
+        terminal.render(portfolio)
+        return
     if page == "My Holdings":
         page_holdings(portfolio)
         return
